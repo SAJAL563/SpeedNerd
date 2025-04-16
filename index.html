@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en" class="light-mode">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SpeedNerd - Detailed Internet Speed Test</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="theme-toggle">
+                <button id="theme-toggle-btn">
+                    <i class="fas fa-sun"></i>
+                    <i class="fas fa-moon"></i>
+                    <div class="toggle-circle"></div>
+                </button>
+            </div>
+            <h1>Speed<span>Nerd</span></h1>
+            <p class="tagline">Detailed internet speed metrics for tech enthusiasts</p>
+        </header>
+
+        <div class="speed-test-container">
+            <div class="main-display">
+                <div id="speed-value">0</div>
+                <div class="unit">Mbps</div>
+                <div id="test-status">Ready to test your connection</div>
+            </div>
+
+            <button id="start-test" class="btn">START</button>
+
+            <div class="loading-indicator">
+                <div class="spinner"></div>
+            </div>
+
+            <div class="test-details">
+                <div class="detail-box">
+                    <h3>Download</h3>
+                    <div class="value" id="download-speed">0 Mbps</div>
+                </div>
+                <div class="detail-box">
+                    <h3>Upload</h3>
+                    <div class="value" id="upload-speed">0 Mbps</div>
+                </div>
+                <div class="detail-box">
+                    <h3>Ping</h3>
+                    <div class="value" id="ping">0 ms</div>
+                </div>
+                <div class="detail-box">
+                    <h3>Jitter</h3>
+                    <div class="value" id="jitter">0 ms</div>
+                </div>
+            </div>
+
+            <div class="advanced-metrics hidden" id="advanced-metrics">
+                <h2>Advanced Metrics</h2>
+                <div class="metrics-grid">
+                    <div class="metric-item">
+                        <div class="metric-name">Round Trip Time (RTT)</div>
+                        <div class="metric-value" id="rtt">0 ms</div>
+                    </div>
+                    <div class="metric-item">
+                        <div class="metric-name">Packet Loss</div>
+                        <div class="metric-value" id="packet-loss">0%</div>
+                    </div>
+                    <div class="metric-item">
+                        <div class="metric-name">DNS Lookup</div>
+                        <div class="metric-value" id="dns-lookup">0 ms</div>
+                    </div>
+                    <div class="metric-item">
+                        <div class="metric-name">TCP Connection</div>
+                        <div class="metric-value" id="tcp-connection">0 ms</div>
+                    </div>
+                    <div class="metric-item">
+                        <div class="metric-name">TLS Handshake</div>
+                        <div class="metric-value" id="tls-handshake">0 ms</div>
+                    </div>
+                    <div class="metric-item">
+                        <div class="metric-name">Server Location</div>
+                        <div class="metric-value" id="server-location">-</div>
+                    </div>
+                    <div class="metric-item">
+                        <div class="metric-name">Connection Type</div>
+                        <div class="metric-value" id="connection-type">-</div>
+                    </div>
+                    <div class="metric-item">
+                        <div class="metric-name">IP Address</div>
+                        <div class="metric-value" id="ip-address">-</div>
+                    </div>
+                </div>
+            </div>
+
+            <button id="toggle-advanced" class="btn btn-secondary">Show Advanced Metrics</button>
+        </div>
+
+        <div class="history-section hidden" id="history-section">
+            <h2>Test History</h2>
+            <table id="history-table">
+                <thead>
+                    <tr>
+                        <th>Date & Time</th>
+                        <th>Download</th>
+                        <th>Upload</th>
+                        <th>Ping</th>
+                        <th>Server</th>
+                    </tr>
+                </thead>
+                <tbody id="history-data">
+                    <!-- Historical data will be inserted here -->
+                </tbody>
+            </table>
+        </div>
+
+        <button id="toggle-history" class="btn btn-secondary">Show Test History</button>
+
+        <div class="network-graph">
+            <canvas id="speed-chart"></canvas>
+        </div>
+    </div>
+
+    <footer>
+        <p>© 2023 SpeedNerd | All measurements are estimates and may vary</p>
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="script.js"></script>
+</body>
+</html> 
