@@ -333,79 +333,62 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Build URL based on server type
                 switch(server.name) {
                     case 'Cloudflare':
-                        requestUrl = `${server.url}?bytes=${size * 1024 * 1024}&t=${Date.now()}`;
+                        // Cloudflare download endpoint requires bytes parameter
+                        requestUrl = `${server.url}?bytes=${size * 1024 * 1024}&cachebust=${Date.now()}`;
                         break;
                     case 'HTTPBin':
+                    case 'EU-HTTPBin':
+                        // HTTPBin requires bytes directly in URL
                         const sizeInBytes = size * 1024 * 1024;
-                        requestUrl = `${server.url}${sizeInBytes}?t=${Date.now()}`;
+                        requestUrl = `${server.url}/${sizeInBytes}?cachebust=${Date.now()}`;
                         break;
-                    case 'Hetzner':
-                        // Hetzner provides fixed size files, so just use timestamp to avoid cache
-                        requestUrl = `${server.url}?t=${Date.now()}`;
-                        break;
+                    case 'Google':
+                    case 'GoogleCDN':
                     case 'JSDelivr':
-                        // Use CDN URL with timestamp
-                        requestUrl = `${server.url}?t=${Date.now()}`;
-                        break;
-                    case 'Speedtest.net':
-                        // Use base URL with timestamp
-                        requestUrl = `${server.url}/test/random${size}x${size}.jpg?t=${Date.now()}`;
+                        // For static resources, just add cache busting
+                        requestUrl = `${server.url}?cachebust=${Date.now()}`;
                         break;
                     default:
-                        requestUrl = `${server.url}?t=${Date.now()}`;
+                        requestUrl = `${server.url}?cachebust=${Date.now()}`;
                 }
                 
-                console.log(`Attempting download from: ${requestUrl}`);
+                console.log(`Download test from: ${server.name}, URL: ${requestUrl}`);
+                
+                // Set up fetch with AbortController for timeout
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
                 
                 const fetchStart = performance.now();
                 const response = await fetch(requestUrl, { 
-                    cache: 'no-store'
-                    // Removed mode: 'no-cors' to properly measure download
+                    cache: 'no-store',
+                    signal: controller.signal
                 });
                 
                 // Handle response
-                let bytes = 0;
-                if (response.ok) {
-                    try {
-                        const blob = await response.blob();
-                        bytes = blob.size;
-                        console.log(`Downloaded ${bytes} bytes from ${server.name}`);
-                    } catch (blobError) {
-                        console.error('Error getting blob:', blobError);
-                        // If blob fails, estimate size based on headers
-                        const contentLength = response.headers.get('content-length');
-                        if (contentLength) {
-                            bytes = parseInt(contentLength, 10);
-                            console.log(`Using content-length: ${bytes} bytes`);
-                        } else {
-                            // Last resort fallback
-                            bytes = size * 1024 * 1024 * 0.8;
-                            console.warn('Estimating download size: no content-length header');
-                        }
-                    }
-                } else {
-                    console.error(`Server returned status: ${response.status}`);
-                    // Try fallback approach with no-cors mode
-                    try {
-                        const fallbackResponse = await fetch(requestUrl, { 
-                            cache: 'no-store',
-                            mode: 'no-cors'
-                        });
-                        // We can't read the response due to CORS, so estimate
-                        bytes = size * 1024 * 1024 * 0.7;
-                        console.warn('Using estimated size due to CORS restrictions');
-                    } catch (fallbackError) {
-                        console.error('Fallback request failed:', fallbackError);
-                        throw new Error('Download request failed');
-                    }
+                if (!response.ok) {
+                    console.error(`Server returned error status: ${response.status}`);
+                    throw new Error(`HTTP error ${response.status}`);
                 }
                 
-                totalBytesDownloaded += bytes;
+                // Get data
+                const blob = await response.blob();
+                clearTimeout(timeoutId);
                 
-                const elapsedSecs = (performance.now() - startTime) / 1000;
-                if (elapsedSecs > 0) {
+                const fetchEnd = performance.now();
+                const downloadTime = (fetchEnd - fetchStart) / 1000; // in seconds
+                
+                // Use actual download size from blob
+                const bytes = blob.size;
+                console.log(`Downloaded ${bytes} bytes in ${downloadTime.toFixed(2)}s (${server.name})`);
+                
+                if (bytes > 0) {
+                    totalBytesDownloaded += bytes;
+                    
+                    // Calculate current speed
+                    const elapsedSecs = (performance.now() - startTime) / 1000;
                     const speedMbps = (totalBytesDownloaded * 8) / (1000000 * elapsedSecs);
                     
+                    // Update UI
                     speedValue.textContent = speedMbps.toFixed(2);
                     downloadSpeed.textContent = `${speedMbps.toFixed(2)} Mbps`;
                     
@@ -414,55 +397,40 @@ document.addEventListener('DOMContentLoaded', () => {
                         time: new Date().toLocaleTimeString(),
                         speed: speedMbps
                     });
+                } else {
+                    console.warn(`Zero bytes downloaded from ${server.name}, skipping measurement`);
                 }
             } catch (error) {
-                console.error('Download test error:', error);
+                console.error(`Download test error (${server.name}):`, error);
                 
-                // Try fallback server if first attempt fails
-                if (!server.fallbackAttempted) {
-                    server.fallbackAttempted = true;
-                    console.log('Trying to continue test with next available server');
-                    // Will try again with next iteration
-                } else {
-                    // If all attempts fail, add minimal simulated data
-                    const size = testConfig.downloadSizes[0];  // Use smallest size
-                    totalBytesDownloaded += size * 1024 * 1024 * 0.2;  // Add minimal simulated data
-                    console.warn('Using minimal simulated download data');
-                }
+                // Try next server on failure
+                const nextServer = (testConfig.selectedServer + 1) % testConfig.servers.length;
+                console.log(`Switching to server: ${testConfig.servers[nextServer].name}`);
+                testConfig.selectedServer = nextServer;
             }
             
             // Short delay to prevent browser freeze
-            await new Promise(resolve => setTimeout(resolve, 100));
+            await new Promise(resolve => setTimeout(resolve, 200));
         }
-        
-        // Reset fallback flag for next test
-        testConfig.servers.forEach(s => s.fallbackAttempted = false);
         
         const totalElapsedSecs = (performance.now() - startTime) / 1000;
         let finalSpeedMbps = 0;
         
         if (totalElapsedSecs > 0 && totalBytesDownloaded > 0) {
             finalSpeedMbps = (totalBytesDownloaded * 8) / (1000000 * totalElapsedSecs);
-            console.log(`Final download speed: ${finalSpeedMbps.toFixed(2)} Mbps`);
+            console.log(`Final real download speed: ${finalSpeedMbps.toFixed(2)} Mbps (${totalBytesDownloaded} bytes in ${totalElapsedSecs.toFixed(2)}s)`);
         } else {
-            // If test failed completely, provide a simulated result
-            finalSpeedMbps = Math.random() * 50 + 10;  // Random between 10-60 Mbps
-            console.warn('Using simulated download speed result');
+            console.error('Download test failed to collect any data');
+            throw new Error('Failed to measure download speed');
         }
         
         // Update chart with download data
         downloadData.forEach((data, index) => {
-            if (index % 3 === 0) { // Only add every 3rd point to avoid cluttering
+            if (index % 3 === 0 || index === downloadData.length - 1) { // Every 3rd point plus the last one
                 speedChart.data.labels.push(data.time);
                 speedChart.data.datasets[0].data.push(data.speed);
             }
         });
-        
-        // If no data points were collected, add at least one
-        if (downloadData.length === 0) {
-            speedChart.data.labels.push(new Date().toLocaleTimeString());
-            speedChart.data.datasets[0].data.push(finalSpeedMbps);
-        }
         
         speedChart.update();
         
@@ -478,45 +446,62 @@ document.addEventListener('DOMContentLoaded', () => {
         const endTime = startTime + (testConfig.testDuration * 1000);
         
         const uploadData = [];
+        let realUploadPerformed = false;
+        
+        // Create test servers specifically for uploads
+        const uploadEndpoints = [
+            'https://httpbin.org/post',
+            'https://eu.httpbin.org/post'
+        ];
+        let currentEndpoint = 0;
+        
+        console.log("Starting upload test...");
         
         while (performance.now() < endTime) {
             try {
                 const size = testConfig.uploadSizes[Math.floor(Math.random() * testConfig.uploadSizes.length)];
-                const data = new ArrayBuffer(size * 1024 * 1024); // Convert MB to bytes
                 
-                let requestUrl = server.url;
-                let method = 'POST';
-                
-                // Some servers don't accept POST requests, so we handle differently
-                if (server.name === 'Google' || server.name === 'GoogleCDN' || server.name === 'JSDelivr') {
-                    // For CDN/static servers, we can't upload but can simulate by timing a GET request
-                    method = 'GET';
-                    requestUrl += `?t=${Date.now()}`;
-                    console.log(`Simulating upload to ${server.name} using GET timing`);
-                } else {
-                    console.log(`Uploading ${size}MB to ${server.name}`);
+                // Create a blob with random data to upload
+                const randomData = new Uint8Array(size * 1024 * 1024);
+                for (let i = 0; i < randomData.length; i += 4096) {
+                    randomData[i] = Math.floor(Math.random() * 256);
                 }
+                const blob = new Blob([randomData]);
+                
+                // Select an appropriate endpoint for uploads
+                const uploadUrl = uploadEndpoints[currentEndpoint];
+                console.log(`Uploading ${size}MB to ${uploadUrl}`);
+                
+                // Set up fetch with AbortController for timeout
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
                 
                 const fetchStart = performance.now();
-                const response = await fetch(requestUrl, {
-                    method: method,
-                    body: method === 'POST' ? data : undefined,
-                    mode: 'no-cors', // Upload usually requires CORS
+                const response = await fetch(uploadUrl, {
+                    method: 'POST',
+                    body: blob,
+                    headers: {
+                        'Content-Type': 'application/octet-stream'
+                    },
+                    signal: controller.signal,
                     cache: 'no-store'
                 });
                 
-                // We can't check response.ok due to no-cors mode
+                clearTimeout(timeoutId);
                 const fetchEnd = performance.now();
-                const uploadTime = fetchEnd - fetchStart;
                 
-                // For GET requests (simulated uploads), we estimate based on timing
-                if (method === 'GET') {
-                    const simulatedBytes = size * 1024 * 1024 * 0.5; // simulate half the intended size
-                    totalBytesUploaded += simulatedBytes;
-                    console.log(`Simulated upload: ${simulatedBytes} bytes in ${uploadTime}ms`);
-                } else {
-                    totalBytesUploaded += size * 1024 * 1024;
+                if (!response.ok) {
+                    console.error(`Upload server returned error: ${response.status}`);
+                    throw new Error(`HTTP error ${response.status}`);
                 }
+                
+                const uploadTime = (fetchEnd - fetchStart) / 1000; // in seconds
+                const bytes = size * 1024 * 1024; // Size in bytes
+                
+                console.log(`Uploaded ${bytes} bytes in ${uploadTime.toFixed(2)}s`);
+                
+                totalBytesUploaded += bytes;
+                realUploadPerformed = true;
                 
                 const elapsedSecs = (performance.now() - startTime) / 1000;
                 const speedMbps = (totalBytesUploaded * 8) / (1000000 * elapsedSecs);
@@ -532,34 +517,29 @@ document.addEventListener('DOMContentLoaded', () => {
             } catch (error) {
                 console.error('Upload test error:', error);
                 
-                // Try to continue with minimal data
-                if (totalBytesUploaded === 0) {
-                    // If we haven't uploaded anything yet, add minimal simulated data
-                    const size = testConfig.uploadSizes[0];  // Use smallest size
-                    totalBytesUploaded += size * 1024 * 1024 * 0.2;
-                    console.warn('Using minimal simulated upload data');
-                }
+                // Try the next endpoint
+                currentEndpoint = (currentEndpoint + 1) % uploadEndpoints.length;
+                console.log(`Switching to upload endpoint: ${uploadEndpoints[currentEndpoint]}`);
             }
             
             // Short delay to prevent browser freeze
-            await new Promise(resolve => setTimeout(resolve, 100));
+            await new Promise(resolve => setTimeout(resolve, 200));
         }
         
         const totalElapsedSecs = (performance.now() - startTime) / 1000;
         let finalSpeedMbps = 0;
         
-        if (totalElapsedSecs > 0 && totalBytesUploaded > 0) {
+        if (totalElapsedSecs > 0 && totalBytesUploaded > 0 && realUploadPerformed) {
             finalSpeedMbps = (totalBytesUploaded * 8) / (1000000 * totalElapsedSecs);
-            console.log(`Final upload speed: ${finalSpeedMbps.toFixed(2)} Mbps`);
+            console.log(`Final real upload speed: ${finalSpeedMbps.toFixed(2)} Mbps (${totalBytesUploaded} bytes in ${totalElapsedSecs.toFixed(2)}s)`);
         } else {
-            // If test completely failed, use simulation
-            finalSpeedMbps = Math.random() * 30 + 5; // Random between 5-35 Mbps
-            console.warn('Using simulated upload speed result');
+            console.error('Upload test failed to collect reliable data');
+            throw new Error('Failed to measure upload speed');
         }
         
         // Update chart with upload data
         uploadData.forEach((data, index) => {
-            if (index % 3 === 0) { // Only add every 3rd point to avoid cluttering
+            if (index % 3 === 0 || index === uploadData.length - 1) { // Every 3rd point plus the last one
                 if (speedChart.data.datasets[1].data.length < speedChart.data.labels.length) {
                     // If we already have a label from download test
                     speedChart.data.datasets[1].data.push(data.speed);
@@ -677,6 +657,8 @@ document.addEventListener('DOMContentLoaded', () => {
         startButton.disabled = true;
         
         try {
+            console.log("=== STARTING SPEED TEST ===");
+            
             // Select the best server
             await selectBestServer();
             
@@ -685,39 +667,58 @@ document.addEventListener('DOMContentLoaded', () => {
             testStatus.textContent = `Selected server: ${serverName}`;
             
             // Get connection info
-            await getConnectionInfo();
+            try {
+                await getConnectionInfo();
+            } catch (connectionError) {
+                console.error("Connection info error:", connectionError);
+                // Continue the test even if connection info fails
+            }
             
             // Simulate connection metrics
             simulateConnectionMetrics();
             
             // Measure ping
-            const pingResult = await measurePing();
+            let pingResult;
+            try {
+                pingResult = await measurePing();
+                console.log(`Ping test completed: ${pingResult.toFixed(0)} ms`);
+            } catch (pingError) {
+                console.error("Ping test error:", pingError);
+                pingResult = 0; // Continue even if ping fails
+            }
             
             // Measure download speed
             testStatus.textContent = 'Starting download test...';
             let downloadResult;
+            let downloadError = null;
             try {
                 downloadResult = await measureDownloadSpeed();
-                if (downloadResult <= 0) {
-                    throw new Error('Download test failed');
-                }
-            } catch (downloadError) {
-                console.error('Download test error, trying alternate server:', downloadError);
+                console.log(`Download test completed: ${downloadResult.toFixed(2)} Mbps`);
+            } catch (error) {
+                downloadError = error;
+                console.error("Download test failed:", error);
                 
-                // Try a different server
-                const currentServer = testConfig.selectedServer;
-                testConfig.selectedServer = (currentServer + 1) % testConfig.servers.length;
-                testStatus.textContent = `Trying alternate server: ${testConfig.servers[testConfig.selectedServer].name}`;
-                
-                try {
-                    downloadResult = await measureDownloadSpeed();
-                } catch (retryError) {
-                    console.error('Retry download test failed:', retryError);
-                    if (testConfig.fallbackToSimulation) {
-                        // Fallback to simulation
-                        downloadResult = Math.random() * 50 + 10; // Random between 10-60 Mbps
-                        console.warn('Using simulated download result');
+                // Try each server one by one
+                for (let i = 0; i < testConfig.servers.length; i++) {
+                    try {
+                        testConfig.selectedServer = i;
+                        const currentServer = testConfig.servers[i];
+                        testStatus.textContent = `Trying server: ${currentServer.name}`;
+                        console.log(`Trying download test with server: ${currentServer.name}`);
+                        
+                        downloadResult = await measureDownloadSpeed();
+                        if (downloadResult > 0) {
+                            console.log(`Download test succeeded with ${currentServer.name}: ${downloadResult.toFixed(2)} Mbps`);
+                            downloadError = null;
+                            break;
+                        }
+                    } catch (retryError) {
+                        console.error(`Download retry failed with ${testConfig.servers[i].name}:`, retryError);
                     }
+                }
+                
+                if (downloadError) {
+                    throw new Error("All download test attempts failed");
                 }
             }
             
@@ -725,16 +726,26 @@ document.addEventListener('DOMContentLoaded', () => {
             downloadSpeed.textContent = `${downloadResult.toFixed(2)} Mbps`;
             
             // Measure upload speed
-            const uploadResult = await measureUploadSpeed();
+            testStatus.textContent = 'Starting upload test...';
+            let uploadResult;
+            try {
+                uploadResult = await measureUploadSpeed();
+                console.log(`Upload test completed: ${uploadResult.toFixed(2)} Mbps`);
+            } catch (uploadError) {
+                console.error("Upload test failed:", uploadError);
+                throw new Error("Upload test failed");
+            }
             
-            // Save test result
+            // Save test result only if all tests succeeded
             saveTestResult(downloadResult, uploadResult, pingResult, serverName);
             
             // Update status
             testStatus.textContent = 'Test completed successfully';
+            console.log("=== TEST COMPLETED SUCCESSFULLY ===");
         } catch (error) {
             console.error('Speed test error:', error);
-            testStatus.textContent = 'Error during test: ' + error.message;
+            testStatus.textContent = 'Error: ' + error.message;
+            console.log("=== TEST FAILED ===");
         } finally {
             // Hide loading indicator
             loadingIndicator.style.display = 'none';
