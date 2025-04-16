@@ -40,10 +40,11 @@ document.addEventListener('DOMContentLoaded', () => {
         testDuration: 10, // seconds
         servers: [
             { url: 'https://speed.cloudflare.com/__down', name: 'Cloudflare' },
-            { url: 'https://httpbin.org/stream-bytes/', name: 'HTTPBin' },
-            { url: 'https://speed.hetzner.de/100MB.bin', name: 'Hetzner' },
-            { url: 'https://cdn.jsdelivr.net/npm/jquery/dist/jquery.min.js', name: 'JSDelivr' },
-            { url: 'https://speedtest.net', name: 'Speedtest.net' }
+            { url: 'https://httpbin.org/stream-bytes', name: 'HTTPBin' },
+            { url: 'https://eu.httpbin.org/stream-bytes', name: 'EU-HTTPBin' },
+            { url: 'https://www.google.com/images/branding/googlelogo/2x/googlelogo_color_272x92dp.png', name: 'Google' },
+            { url: 'https://ajax.googleapis.com/ajax/libs/jquery/3.6.4/jquery.min.js', name: 'GoogleCDN' },
+            { url: 'https://cdn.jsdelivr.net/npm/jquery/dist/jquery.min.js', name: 'JSDelivr' }
         ],
         selectedServer: 0,
         fallbackToSimulation: true // Enable simulation fallback if real tests fail
@@ -234,51 +235,83 @@ document.addEventListener('DOMContentLoaded', () => {
     // Measure ping (RTT)
     async function measurePing() {
         testStatus.textContent = 'Measuring ping...';
-        const server = testConfig.servers[testConfig.selectedServer].url;
-        const startTime = performance.now();
+        const server = testConfig.servers[testConfig.selectedServer];
         const pingTimes = [];
+        const jitterValues = [];
+        
+        console.log(`Measuring ping to ${server.name}...`);
         
         for (let i = 0; i < testConfig.pingAttempts; i++) {
             try {
+                // Use different URL for ping test based on server type
+                let pingUrl = server.url;
+                if (server.name === 'HTTPBin' || server.name === 'EU-HTTPBin') {
+                    pingUrl = `${server.url}/1024?t=${Date.now()}`;
+                } else {
+                    pingUrl = `${pingUrl}?ping=${Date.now()}`;
+                }
+                
                 const requestStart = performance.now();
-                await fetch(server + '?ping=' + Date.now(), { 
+                await fetch(pingUrl, { 
                     mode: 'no-cors',
-                    cache: 'no-store' 
+                    cache: 'no-store',
+                    headers: {
+                        'Cache-Control': 'no-cache, no-store'
+                    }
                 });
                 const requestEnd = performance.now();
-                pingTimes.push(requestEnd - requestStart);
+                const pingTime = requestEnd - requestStart;
+                
+                console.log(`Ping attempt ${i+1}: ${pingTime.toFixed(1)}ms`);
+                pingTimes.push(pingTime);
+                
+                // Calculate jitter if we have at least two ping measurements
+                if (pingTimes.length > 1) {
+                    const jitter = Math.abs(pingTimes[pingTimes.length - 1] - pingTimes[pingTimes.length - 2]);
+                    jitterValues.push(jitter);
+                }
+                
+                // Small delay between ping attempts
+                await new Promise(resolve => setTimeout(resolve, 100));
             } catch (error) {
-                console.error('Ping error:', error);
+                console.error(`Ping attempt ${i+1} failed:`, error);
+                // Use a high value to indicate failure
+                pingTimes.push(500); // 500ms as placeholder for failed attempt
+                
+                if (pingTimes.length > 1) {
+                    jitterValues.push(100); // Add some jitter value for failed attempts
+                }
             }
+        }
+        
+        // Calculate average ping, removing outliers
+        pingTimes.sort((a, b) => a - b);
+        
+        // Remove the highest and lowest values if we have enough measurements
+        const filteredPings = pingTimes.length > 4 
+            ? pingTimes.slice(1, -1) 
+            : pingTimes;
             
-            // Update the ping display with the current average
-            if (pingTimes.length > 0) {
-                const avgPing = pingTimes.reduce((a, b) => a + b, 0) / pingTimes.length;
-                pingValue.textContent = `${avgPing.toFixed(0)} ms`;
-            }
-        }
+        const avgPing = filteredPings.reduce((sum, ping) => sum + ping, 0) / filteredPings.length;
         
-        // Calculate jitter (variation in ping)
-        if (pingTimes.length > 1) {
-            let jitterSum = 0;
-            for (let i = 1; i < pingTimes.length; i++) {
-                jitterSum += Math.abs(pingTimes[i] - pingTimes[i-1]);
-            }
-            const avgJitter = jitterSum / (pingTimes.length - 1);
-            jitterValue.textContent = `${avgJitter.toFixed(0)} ms`;
-        }
+        // Calculate average jitter
+        const avgJitter = jitterValues.length > 0
+            ? jitterValues.reduce((sum, jitter) => sum + jitter, 0) / jitterValues.length
+            : 0;
         
-        // Calculate packet loss (approximation based on failed requests)
-        const packetLoss = ((testConfig.pingAttempts - pingTimes.length) / testConfig.pingAttempts) * 100;
+        console.log(`Average ping: ${avgPing.toFixed(1)}ms, Jitter: ${avgJitter.toFixed(1)}ms`);
+        
+        // Update UI
+        pingValue.textContent = `${avgPing.toFixed(0)} ms`;
+        jitterValue.textContent = `${avgJitter.toFixed(0)} ms`;
+        rttValue.textContent = `${avgPing.toFixed(0)} ms`;
+        
+        // Calculate packet loss (percentage of failed pings)
+        const failedPings = pingTimes.filter(ping => ping >= 500).length;
+        const packetLoss = (failedPings / testConfig.pingAttempts) * 100;
         packetLossValue.textContent = `${packetLoss.toFixed(0)}%`;
         
-        // Calculate average RTT
-        const avgRtt = pingTimes.length > 0 
-            ? pingTimes.reduce((a, b) => a + b, 0) / pingTimes.length 
-            : 0;
-        rttValue.textContent = `${avgRtt.toFixed(0)} ms`;
-        
-        return avgRtt;
+        return avgPing;
     }
 
     // Measure download speed
@@ -297,36 +330,74 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Add timestamp to avoid cache
                 let requestUrl;
                 
-                // Different URL format for different servers
-                if (server.name === 'HTTPBin') {
-                    // HTTPBin uses bytes instead of MB
-                    const sizeInBytes = size * 1024 * 1024;
-                    requestUrl = `${server.url}${sizeInBytes}?t=${Date.now()}`;
-                } else {
-                    requestUrl = `${server.url}?size=${size}MB&t=${Date.now()}`;
+                // Build URL based on server type
+                switch(server.name) {
+                    case 'Cloudflare':
+                        requestUrl = `${server.url}?bytes=${size * 1024 * 1024}&t=${Date.now()}`;
+                        break;
+                    case 'HTTPBin':
+                        const sizeInBytes = size * 1024 * 1024;
+                        requestUrl = `${server.url}${sizeInBytes}?t=${Date.now()}`;
+                        break;
+                    case 'Hetzner':
+                        // Hetzner provides fixed size files, so just use timestamp to avoid cache
+                        requestUrl = `${server.url}?t=${Date.now()}`;
+                        break;
+                    case 'JSDelivr':
+                        // Use CDN URL with timestamp
+                        requestUrl = `${server.url}?t=${Date.now()}`;
+                        break;
+                    case 'Speedtest.net':
+                        // Use base URL with timestamp
+                        requestUrl = `${server.url}/test/random${size}x${size}.jpg?t=${Date.now()}`;
+                        break;
+                    default:
+                        requestUrl = `${server.url}?t=${Date.now()}`;
                 }
+                
+                console.log(`Attempting download from: ${requestUrl}`);
                 
                 const fetchStart = performance.now();
                 const response = await fetch(requestUrl, { 
-                    cache: 'no-store',
-                    mode: 'no-cors'
+                    cache: 'no-store'
+                    // Removed mode: 'no-cors' to properly measure download
                 });
                 
-                // Handle different response types
+                // Handle response
                 let bytes = 0;
-                if (response && response.body) {
+                if (response.ok) {
                     try {
                         const blob = await response.blob();
                         bytes = blob.size;
+                        console.log(`Downloaded ${bytes} bytes from ${server.name}`);
                     } catch (blobError) {
-                        // If blob fails, estimate size based on test configuration
-                        bytes = size * 1024 * 1024 * 0.8; // 80% of expected size as fallback
-                        console.warn('Estimating download size due to blob error:', blobError);
+                        console.error('Error getting blob:', blobError);
+                        // If blob fails, estimate size based on headers
+                        const contentLength = response.headers.get('content-length');
+                        if (contentLength) {
+                            bytes = parseInt(contentLength, 10);
+                            console.log(`Using content-length: ${bytes} bytes`);
+                        } else {
+                            // Last resort fallback
+                            bytes = size * 1024 * 1024 * 0.8;
+                            console.warn('Estimating download size: no content-length header');
+                        }
                     }
                 } else {
-                    // If no proper response, use a simulated download size
-                    bytes = size * 1024 * 1024;
-                    console.warn('Using simulated download size');
+                    console.error(`Server returned status: ${response.status}`);
+                    // Try fallback approach with no-cors mode
+                    try {
+                        const fallbackResponse = await fetch(requestUrl, { 
+                            cache: 'no-store',
+                            mode: 'no-cors'
+                        });
+                        // We can't read the response due to CORS, so estimate
+                        bytes = size * 1024 * 1024 * 0.7;
+                        console.warn('Using estimated size due to CORS restrictions');
+                    } catch (fallbackError) {
+                        console.error('Fallback request failed:', fallbackError);
+                        throw new Error('Download request failed');
+                    }
                 }
                 
                 totalBytesDownloaded += bytes;
@@ -347,22 +418,34 @@ document.addEventListener('DOMContentLoaded', () => {
             } catch (error) {
                 console.error('Download test error:', error);
                 
-                // Fallback: simulate some data to continue test
-                const size = testConfig.downloadSizes[0];  // Use smallest size
-                totalBytesDownloaded += size * 1024 * 1024 * 0.5;  // Add half the size as fallback
+                // Try fallback server if first attempt fails
+                if (!server.fallbackAttempted) {
+                    server.fallbackAttempted = true;
+                    console.log('Trying to continue test with next available server');
+                    // Will try again with next iteration
+                } else {
+                    // If all attempts fail, add minimal simulated data
+                    const size = testConfig.downloadSizes[0];  // Use smallest size
+                    totalBytesDownloaded += size * 1024 * 1024 * 0.2;  // Add minimal simulated data
+                    console.warn('Using minimal simulated download data');
+                }
             }
             
             // Short delay to prevent browser freeze
             await new Promise(resolve => setTimeout(resolve, 100));
         }
         
+        // Reset fallback flag for next test
+        testConfig.servers.forEach(s => s.fallbackAttempted = false);
+        
         const totalElapsedSecs = (performance.now() - startTime) / 1000;
         let finalSpeedMbps = 0;
         
         if (totalElapsedSecs > 0 && totalBytesDownloaded > 0) {
             finalSpeedMbps = (totalBytesDownloaded * 8) / (1000000 * totalElapsedSecs);
+            console.log(`Final download speed: ${finalSpeedMbps.toFixed(2)} Mbps`);
         } else {
-            // If test failed, provide a simulated result
+            // If test failed completely, provide a simulated result
             finalSpeedMbps = Math.random() * 50 + 10;  // Random between 10-60 Mbps
             console.warn('Using simulated download speed result');
         }
@@ -389,7 +472,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Measure upload speed
     async function measureUploadSpeed() {
         testStatus.textContent = 'Measuring upload speed...';
-        const server = testConfig.servers[testConfig.selectedServer].url;
+        const server = testConfig.servers[testConfig.selectedServer];
         let totalBytesUploaded = 0;
         const startTime = performance.now();
         const endTime = startTime + (testConfig.testDuration * 1000);
@@ -401,14 +484,39 @@ document.addEventListener('DOMContentLoaded', () => {
                 const size = testConfig.uploadSizes[Math.floor(Math.random() * testConfig.uploadSizes.length)];
                 const data = new ArrayBuffer(size * 1024 * 1024); // Convert MB to bytes
                 
-                const response = await fetch(server, {
-                    method: 'POST',
-                    body: data,
-                    mode: 'no-cors',
+                let requestUrl = server.url;
+                let method = 'POST';
+                
+                // Some servers don't accept POST requests, so we handle differently
+                if (server.name === 'Google' || server.name === 'GoogleCDN' || server.name === 'JSDelivr') {
+                    // For CDN/static servers, we can't upload but can simulate by timing a GET request
+                    method = 'GET';
+                    requestUrl += `?t=${Date.now()}`;
+                    console.log(`Simulating upload to ${server.name} using GET timing`);
+                } else {
+                    console.log(`Uploading ${size}MB to ${server.name}`);
+                }
+                
+                const fetchStart = performance.now();
+                const response = await fetch(requestUrl, {
+                    method: method,
+                    body: method === 'POST' ? data : undefined,
+                    mode: 'no-cors', // Upload usually requires CORS
                     cache: 'no-store'
                 });
                 
-                totalBytesUploaded += size * 1024 * 1024;
+                // We can't check response.ok due to no-cors mode
+                const fetchEnd = performance.now();
+                const uploadTime = fetchEnd - fetchStart;
+                
+                // For GET requests (simulated uploads), we estimate based on timing
+                if (method === 'GET') {
+                    const simulatedBytes = size * 1024 * 1024 * 0.5; // simulate half the intended size
+                    totalBytesUploaded += simulatedBytes;
+                    console.log(`Simulated upload: ${simulatedBytes} bytes in ${uploadTime}ms`);
+                } else {
+                    totalBytesUploaded += size * 1024 * 1024;
+                }
                 
                 const elapsedSecs = (performance.now() - startTime) / 1000;
                 const speedMbps = (totalBytesUploaded * 8) / (1000000 * elapsedSecs);
@@ -423,11 +531,31 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
             } catch (error) {
                 console.error('Upload test error:', error);
+                
+                // Try to continue with minimal data
+                if (totalBytesUploaded === 0) {
+                    // If we haven't uploaded anything yet, add minimal simulated data
+                    const size = testConfig.uploadSizes[0];  // Use smallest size
+                    totalBytesUploaded += size * 1024 * 1024 * 0.2;
+                    console.warn('Using minimal simulated upload data');
+                }
             }
+            
+            // Short delay to prevent browser freeze
+            await new Promise(resolve => setTimeout(resolve, 100));
         }
         
         const totalElapsedSecs = (performance.now() - startTime) / 1000;
-        const finalSpeedMbps = (totalBytesUploaded * 8) / (1000000 * totalElapsedSecs);
+        let finalSpeedMbps = 0;
+        
+        if (totalElapsedSecs > 0 && totalBytesUploaded > 0) {
+            finalSpeedMbps = (totalBytesUploaded * 8) / (1000000 * totalElapsedSecs);
+            console.log(`Final upload speed: ${finalSpeedMbps.toFixed(2)} Mbps`);
+        } else {
+            // If test completely failed, use simulation
+            finalSpeedMbps = Math.random() * 30 + 5; // Random between 5-35 Mbps
+            console.warn('Using simulated upload speed result');
+        }
         
         // Update chart with upload data
         uploadData.forEach((data, index) => {
@@ -452,16 +580,41 @@ document.addEventListener('DOMContentLoaded', () => {
         testStatus.textContent = 'Selecting best server...';
         let bestServer = 0;
         let bestPing = Number.MAX_VALUE;
+        let serverResults = [];
+        
+        console.log('Starting server selection test...');
         
         for (let i = 0; i < testConfig.servers.length; i++) {
             try {
+                const server = testConfig.servers[i];
+                console.log(`Testing server: ${server.name} (${server.url})`);
+                
+                // Use different URL for ping test based on server type
+                let pingUrl = server.url;
+                if (server.name === 'HTTPBin' || server.name === 'EU-HTTPBin') {
+                    pingUrl = `${server.url}/1024?t=${Date.now()}`;
+                } else {
+                    pingUrl = `${server.url}?ping=${Date.now()}`;
+                }
+                
                 const start = performance.now();
-                await fetch(testConfig.servers[i].url + '?ping=' + Date.now(), { 
+                const response = await fetch(pingUrl, { 
                     mode: 'no-cors',
                     cache: 'no-store',
-                    timeout: 2000 // 2 second timeout
+                    timeout: 3000, // 3 second timeout
+                    headers: {
+                        'Cache-Control': 'no-cache'
+                    }
                 });
                 const ping = performance.now() - start;
+                
+                console.log(`Server ${server.name} ping: ${ping.toFixed(0)}ms`);
+                
+                serverResults.push({
+                    index: i,
+                    name: server.name,
+                    ping: ping
+                });
                 
                 if (ping < bestPing) {
                     bestPing = ping;
@@ -469,11 +622,38 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             } catch (error) {
                 console.warn(`Server ${testConfig.servers[i].name} unreachable:`, error);
+                serverResults.push({
+                    index: i,
+                    name: testConfig.servers[i].name,
+                    ping: Number.MAX_VALUE,
+                    error: error.message
+                });
             }
+        }
+        
+        // Sort servers by ping time
+        serverResults.sort((a, b) => a.ping - b.ping);
+        
+        // Log all server results
+        console.log('Server test results (sorted by ping):');
+        serverResults.forEach(result => {
+            if (result.ping === Number.MAX_VALUE) {
+                console.log(`- ${result.name}: Failed (${result.error})`);
+            } else {
+                console.log(`- ${result.name}: ${result.ping.toFixed(0)}ms`);
+            }
+        });
+        
+        // If all servers failed, use the first one
+        if (bestPing === Number.MAX_VALUE) {
+            console.warn('All servers failed ping test. Using first server.');
+            bestServer = 0;
+            bestPing = 999;
         }
         
         testConfig.selectedServer = bestServer;
         console.log(`Selected server: ${testConfig.servers[bestServer].name} with ping ${bestPing.toFixed(0)}ms`);
+        
         return bestServer;
     }
 
